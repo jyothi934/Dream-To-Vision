@@ -317,7 +317,7 @@ function GenerationProgress({ generation, sceneCount, onCancel }) {
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
 
-export default function VideoGeneration({ dream }) {
+export default function VideoGeneration({ dream, autoStarted = false }) {
   const [videoStatus, setVideoStatus] = useState(null);  // null = not loaded yet
   const [generation, setGeneration] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -335,17 +335,37 @@ export default function VideoGeneration({ dream }) {
     getDreamVideo(dreamId)
       .then((data) => {
         setVideoStatus(data);
-        // If there's an active generation, start polling
+        // Auto-poll if video is already generating (came from CreateDream)
+        // or if there's an active generation in DB
         if (data?.id && ['pending', 'processing'].includes(data?.status)) {
           setGeneration(data);
           startPolling(data.id);
+        } else if (autoStarted && (!data || data.status === 'none')) {
+          // Video was just started but DB not updated yet — poll the dream video endpoint
+          setVideoStatus({ status: 'processing', totalScenes: dream?.scenes?.length || 6 });
+          // Poll for generation to appear
+          const checkInterval = setInterval(async () => {
+            try {
+              const latest = await getDreamVideo(dreamId);
+              if (latest?.id) {
+                clearInterval(checkInterval);
+                setVideoStatus(latest);
+                setGeneration(latest);
+                if (['pending', 'processing'].includes(latest.status)) {
+                  startPolling(latest.id);
+                }
+              }
+            } catch {}
+          }, 3000);
+          // Clean up after 30s if nothing found
+          setTimeout(() => clearInterval(checkInterval), 30000);
         }
       })
       .catch(() => setVideoStatus(null))
       .finally(() => setLoading(false));
 
     return () => stopPolling();
-  }, [dreamId]);
+  }, [dreamId, autoStarted]);
 
   const startPolling = useCallback((genId) => {
     stopPolling();

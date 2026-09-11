@@ -147,7 +147,7 @@ async function runAnalysisPipeline(dreamId, userId) {
 
     // ── Step 2: Generate story ────────────────────────────
     await updateJobProgress(job?.id, 35);
-    await sleep(3000); // brief pause between AI calls
+    await sleep(8000); // pause between AI calls to avoid rate limits
     const storyData = await generateStory(dream.raw_input, analysis);
 
     await supabaseAdmin
@@ -161,7 +161,7 @@ async function runAnalysisPipeline(dreamId, userId) {
 
     // ── Step 3: Generate characters ───────────────────────
     await updateJobProgress(job?.id, 60);
-    await sleep(3000);
+    await sleep(8000);
     const characters = await generateCharacters(dream.raw_input, analysis);
 
     // Delete previous characters for this dream (re-run scenario)
@@ -190,7 +190,7 @@ async function runAnalysisPipeline(dreamId, userId) {
 
     // ── Step 4: Generate scenes ───────────────────────────
     await updateJobProgress(job?.id, 80);
-    await sleep(3000);
+    await sleep(8000);
     const scenes = await generateScenes(dream.raw_input, analysis, storyData);
 
     // Delete previous scenes

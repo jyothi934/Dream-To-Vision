@@ -23,7 +23,7 @@ function sleep(ms) {
  * @param {number} retries
  * @returns {Promise<string>} text response
  */
-async function generateContent(prompt, retries = 3) {
+async function generateContent(prompt, retries = 5) {
   const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`;
 
   const body = {
@@ -45,19 +45,24 @@ async function generateContent(prompt, retries = 3) {
 
     const data = await response.json();
 
-    // Transient errors — retry with backoff
+    // Transient errors — retry with exponential backoff
     if (!response.ok) {
       const msg = data?.error?.message || response.statusText;
       const isTransient =
         response.status === 429 ||
         response.status === 503 ||
+        response.status === 500 ||
         msg.toLowerCase().includes('high demand') ||
         msg.toLowerCase().includes('temporarily') ||
-        msg.toLowerCase().includes('try again');
+        msg.toLowerCase().includes('try again') ||
+        msg.toLowerCase().includes('overloaded') ||
+        msg.toLowerCase().includes('unavailable') ||
+        msg.toLowerCase().includes('rate limit');
 
       if (isTransient && attempt < retries) {
-        const delay = attempt * 8000; // 8s, 16s
-        console.log(`Gemini transient error (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+        // Exponential backoff: 15s, 30s, 60s, 90s
+        const delay = Math.min(15000 * attempt, 90000);
+        console.log(`Gemini transient error (attempt ${attempt}/${retries}), retrying in ${delay / 1000}s: ${msg.substring(0, 80)}`);
         await sleep(delay);
         continue;
       }
