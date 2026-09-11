@@ -65,3 +65,29 @@ export async function checkHealth() {
   const response = await fetch(`${API_URL}/api/health`);
   return response.json();
 }
+
+// ── Video Generation ────────────────────────────────────────
+
+export async function generateVideo(dreamId) {
+  return apiFetch(`/api/dreams/${dreamId}/generate-video`, { method: 'POST' });
+}
+
+export async function getVideoProgress(generationId) {
+  return apiFetch(`/api/video-generations/${generationId}`);
+}
+
+export async function getDreamVideo(dreamId) {
+  return apiFetch(`/api/dreams/${dreamId}/video`);
+}
+
+export async function getSceneVideos(generationId) {
+  return apiFetch(`/api/video-generations/${generationId}/scenes`);
+}
+
+export async function cancelVideoGeneration(generationId) {
+  return apiFetch(`/api/video-generations/${generationId}/cancel`, { method: 'POST' });
+}
+
+export async function refreshVideoUrl(dreamId) {
+  return apiFetch(`/api/dreams/${dreamId}/video/refresh`);
+}

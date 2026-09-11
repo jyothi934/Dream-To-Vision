@@ -260,11 +260,59 @@ Phase 1 test checklist:
 
 ---
 
-## Phase 2 Planned Features
+## Phase 2 — AI Video Generation (COMPLETE)
 
-- AI video generation from visual prompts
-- Video rendering pipeline
-- Video download and export
-- Social sharing
-- Advanced media management
-- Video provider integrations (RunwayML, Kling, etc.)
+### Video Provider
+**fal.ai — Kling v1 Standard Text-to-Video**
+- Model: `fal-ai/kling-video/v1/standard/text-to-video`
+- Async queue: submit → poll → download
+- 16:9 cinematic output, 5–10 seconds per scene
+
+### Phase 2 Flow
+```
+Completed Dream (6 scenes)
+  → POST /api/dreams/:id/generate-video
+  → Background pipeline starts
+  → Each scene: build prompt → submit to Kling → poll → download → upload to Supabase Storage
+  → FFmpeg concatenates all scenes → final.mp4
+  → Upload final.mp4 to Supabase Storage
+  → Frontend polls GET /api/video-generations/:id
+  → Video player renders final MP4
+  → Download button available
+```
+
+### Phase 2 New Tables
+- `video_generations` — overall job tracking (status, progress, final_video_url)
+- `scene_videos` — per-scene tracking (provider_job_id, video_url, storage_path)
+
+### Phase 2 New API Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /api/dreams/:id/generate-video | Start video generation |
+| GET | /api/dreams/:id/video | Get video status for a dream |
+| GET | /api/video-generations/:id | Poll generation progress |
+| GET | /api/video-generations/:id/scenes | Scene video statuses |
+| POST | /api/video-generations/:id/cancel | Cancel active generation |
+| GET | /api/dreams/:id/video/refresh | Refresh signed URL |
+
+### Phase 2 Environment Variables (backend)
+```
+FAL_KEY=your_fal_ai_api_key
+VIDEO_PROVIDER=fal-kling
+```
+
+### Get fal.ai API Key
+1. Go to https://fal.ai/dashboard/keys
+2. Sign in with Google
+3. Create or copy existing key
+4. Add to `backend/.env` as `FAL_KEY`
+
+### Storage
+Videos stored in Supabase Storage bucket `dream-videos`:
+```
+dream-videos/
+  {user_id}/
+    {dream_id}/
+      scene-01.mp4 ... scene-06.mp4
+      final.mp4
+```

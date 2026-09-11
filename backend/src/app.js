@@ -9,6 +9,7 @@ const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const healthRouter = require('./routes/health');
 const dreamsRouter = require('./routes/dreams');
+const videosRouter = require('./routes/videos');
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use(generalLimiter);
 // ── Routes ────────────────────────────────────────────────
 app.use('/api/health', healthRouter);
 app.use('/api/dreams', dreamsRouter);
+app.use('/api', videosRouter);
 
 // ── 404 + Error handlers ──────────────────────────────────
 app.use(notFound);

@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Film, CheckCircle, Clock, AlertCircle, Trash2, Eye, Sparkles, Search
+  Film, CheckCircle, Clock, AlertCircle, Trash2, Eye, Sparkles, Search, Video
 } from 'lucide-react';
-import { getDreams, deleteDream } from '../services/api';
+import { getDreams, deleteDream, getDreamVideo } from '../services/api';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { Badge } from '../components/ui/Badge';
@@ -23,10 +23,23 @@ export default function History() {
   const [search, setSearch] = useState('');
   const [deletingId, setDeletingId] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
+  const [videoStatuses, setVideoStatuses] = useState({}); // dreamId -> status
 
   useEffect(() => {
     getDreams()
-      .then(({ dreams }) => setDreams(dreams || []))
+      .then(({ dreams }) => {
+        setDreams(dreams || []);
+        // Load video status for completed dreams
+        const completed = (dreams || []).filter((d) => d.status === 'completed');
+        completed.forEach(async (d) => {
+          try {
+            const v = await getDreamVideo(d.id);
+            if (v?.status) {
+              setVideoStatuses((prev) => ({ ...prev, [d.id]: v.status }));
+            }
+          } catch {}
+        });
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -142,6 +155,12 @@ export default function History() {
                         <Badge variant={cfg.variant}>{cfg.label}</Badge>
                       </div>
                       <Badge variant="purple">{dream.input_type === 'voice' ? '🎤' : '✍️'}</Badge>
+                      {videoStatuses[dream.id] === 'completed' && (
+                        <Badge variant="cyan">🎬 Video Ready</Badge>
+                      )}
+                      {videoStatuses[dream.id] === 'processing' && (
+                        <Badge variant="gold">⏳ Generating</Badge>
+                      )}
                     </div>
                     {dream.logline && (
                       <p className="text-gray-400 text-sm truncate">{dream.logline}</p>
@@ -157,8 +176,11 @@ export default function History() {
                       to={`/dream/${dream.id}`}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white hover:bg-white/5 transition-all"
                     >
-                      <Eye className="w-4 h-4" />
-                      <span className="hidden sm:inline">View</span>
+                      {videoStatuses[dream.id] === 'completed' ? (
+                        <><Video className="w-4 h-4 text-purple-400" /><span className="hidden sm:inline text-purple-400">Watch</span></>
+                      ) : (
+                        <><Eye className="w-4 h-4" /><span className="hidden sm:inline">View</span></>
+                      )}
                     </Link>
                     <button
                       onClick={() => handleDelete(dream.id)}

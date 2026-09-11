@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Plus, Sparkles, Clock, CheckCircle, AlertCircle, Film, ChevronRight } from 'lucide-react';
+import { Plus, Sparkles, Clock, CheckCircle, AlertCircle, Film, ChevronRight, Video } from 'lucide-react';
 import { useAuth } from '../store/authStore';
-import { getDreams } from '../services/api';
+import { getDreams, getDreamVideo } from '../services/api';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { Badge } from '../components/ui/Badge';
@@ -65,10 +65,23 @@ export default function Dashboard() {
   const [dreams, setDreams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [videosGenerated, setVideosGenerated] = useState(0);
 
   useEffect(() => {
     getDreams()
-      .then(({ dreams }) => setDreams(dreams || []))
+      .then(({ dreams: d }) => {
+        setDreams(d || []);
+        // Count dreams that have a completed video
+        const completed = (d || []).filter((dr) => dr.status === 'completed');
+        let count = 0;
+        Promise.all(
+          completed.map((dr) =>
+            getDreamVideo(dr.id)
+              .then((v) => { if (v?.status === 'completed') count++; })
+              .catch(() => {})
+          )
+        ).then(() => setVideosGenerated(count));
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -102,7 +115,7 @@ export default function Dashboard() {
             { label: 'Total Dreams', value: dreams.length, icon: Film, color: 'text-purple-400' },
             { label: 'Completed', value: completed, icon: CheckCircle, color: 'text-green-400' },
             { label: 'Processing', value: processing, icon: Clock, color: 'text-cyan-400' },
-            { label: 'This Month', value: dreams.filter(d => new Date(d.created_at) > new Date(Date.now() - 30*24*60*60*1000)).length, icon: Sparkles, color: 'text-yellow-400' },
+            { label: 'Videos Generated', value: videosGenerated, icon: Video, color: 'text-pink-400' },
           ].map(({ label, value, icon: Icon, color }) => (
             <div key={label} className="card">
               <div className="flex items-center justify-between mb-2">

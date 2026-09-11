@@ -9,6 +9,7 @@ import {
 import { getDream, deleteDream } from '../services/api';
 import { PageLoader } from '../components/ui/LoadingSpinner';
 import { Badge } from '../components/ui/Badge';
+import VideoGeneration from '../components/video/VideoGeneration';
 
 function Section({ title, icon: Icon, children, defaultOpen = true }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -361,6 +362,24 @@ export default function DreamResult() {
               ))}
             </div>
           </Section>
+        )}
+
+        {/* ── Phase 2: Video Generation ── */}
+        {dream.status === 'completed' && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card mb-4"
+          >
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+                   style={{ background: 'rgba(124, 58, 237, 0.15)' }}>
+                <Film className="w-5 h-5 text-purple-400" />
+              </div>
+              <h2 className="text-lg font-semibold text-white">Your Cinematic Vision</h2>
+            </div>
+            <VideoGeneration dream={dream} />
+          </motion.div>
         )}
 
         {/* Raw input */}
