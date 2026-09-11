@@ -27,12 +27,31 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signUp = async (email, password, username) => {
+    // Sign up the user
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: { data: { username } },
     });
     if (error) throw error;
+
+    // If email confirmation is disabled in Supabase, a session is returned immediately.
+    // If it's still enabled, attempt an immediate sign-in so the user isn't blocked.
+    if (!data.session) {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      // If sign-in fails due to unconfirmed email, surface a clear message
+      if (signInError) {
+        if (signInError.message.toLowerCase().includes('confirm')) {
+          throw new Error('Account created! Please check your email to confirm your account, then sign in.');
+        }
+        throw signInError;
+      }
+      return signInData;
+    }
+
     return data;
   };
 

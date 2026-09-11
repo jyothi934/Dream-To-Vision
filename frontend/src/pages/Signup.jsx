@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Mail, Lock, User, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
+import { Sparkles, Mail, Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuth } from '../store/authStore';
 
 export default function Signup() {
@@ -12,12 +12,10 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    setSuccess('');
 
     if (form.password !== form.confirm) {
       setError('Passwords do not match');
@@ -31,8 +29,8 @@ export default function Signup() {
     setLoading(true);
     try {
       await signUp(form.email, form.password, form.username);
-      setSuccess('Account created! Check your email to confirm, then sign in.');
-      setTimeout(() => navigate('/login'), 3000);
+      // Signup auto-signs in — navigate directly to dashboard
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(err.message || 'Failed to create account');
     } finally {
@@ -70,17 +68,6 @@ export default function Signup() {
               >
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
                 {error}
-              </motion.div>
-            )}
-            {success && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-green-300"
-                style={{ background: 'rgba(52, 211, 153, 0.1)', border: '1px solid rgba(52, 211, 153, 0.2)' }}
-              >
-                <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                {success}
               </motion.div>
             )}
 
@@ -154,7 +141,7 @@ export default function Signup() {
               </div>
             </div>
 
-            <button type="submit" disabled={loading || !!success} className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <button type="submit" disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
               {loading ? (
                 <>
                   <motion.div
