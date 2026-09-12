@@ -45,7 +45,7 @@ async function generateContent(prompt, retries = 5) {
 
     const data = await response.json();
 
-    // Transient errors — retry with exponential backoff
+    // Transient errors — retry with backoff
     if (!response.ok) {
       const msg = data?.error?.message || response.statusText;
       const isTransient =
@@ -57,12 +57,17 @@ async function generateContent(prompt, retries = 5) {
         msg.toLowerCase().includes('try again') ||
         msg.toLowerCase().includes('overloaded') ||
         msg.toLowerCase().includes('unavailable') ||
-        msg.toLowerCase().includes('rate limit');
+        msg.toLowerCase().includes('rate limit') ||
+        msg.toLowerCase().includes('quota') ||
+        msg.toLowerCase().includes('retry');
 
       if (isTransient && attempt < retries) {
-        // Exponential backoff: 15s, 30s, 60s, 90s
-        const delay = Math.min(15000 * attempt, 90000);
-        console.log(`Gemini transient error (attempt ${attempt}/${retries}), retrying in ${delay / 1000}s: ${msg.substring(0, 80)}`);
+        // Parse "retry in X.XXs" from the error message if present
+        const retryMatch = msg.match(/retry\s+in\s+([\d.]+)s/i);
+        const suggestedDelay = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) * 1000 : null;
+        // Use suggested delay + 5s buffer, or exponential backoff
+        const delay = suggestedDelay ? suggestedDelay + 5000 : Math.min(20000 * attempt, 90000);
+        console.log(`Gemini rate limit (attempt ${attempt}/${retries}), waiting ${delay / 1000}s...`);
         await sleep(delay);
         continue;
       }

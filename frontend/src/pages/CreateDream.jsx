@@ -3,17 +3,31 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Mic, MicOff, AlertCircle, Brain, Film, Users,
-  Clapperboard, ChevronRight, CheckCircle
+  Clapperboard, ChevronRight, CheckCircle, Clock, Zap, Star
 } from 'lucide-react';
 import { createDream, analyzeDream } from '../services/api';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 
-// Phase 1 pipeline steps only — video is done manually via Google Flow
+// Phase 1 pipeline steps
 const STEPS = [
   { icon: Brain,        label: 'Analyzing dream',    phase: 1 },
   { icon: Film,         label: 'Crafting story',     phase: 1 },
   { icon: Users,        label: 'Building characters',phase: 1 },
   { icon: Clapperboard, label: 'Generating scenes',  phase: 1 },
+];
+
+// Video duration options — total video length = scenes × duration per scene
+const DURATION_OPTIONS = [
+  { value: '1',  label: '1 min',  sceneDuration: 6,  scenes: 6,  description: '6 scenes × 6s' },
+  { value: '2',  label: '2 min',  sceneDuration: 10, scenes: 8,  description: '8 scenes × 10s' },
+  { value: '3',  label: '3 min',  sceneDuration: 10, scenes: 10, description: '10 scenes × 10s' },
+];
+
+// Video quality options
+const QUALITY_OPTIONS = [
+  { value: 'standard', label: 'Standard',  icon: Clock, desc: '720p · Faster',    color: '#60a5fa' },
+  { value: 'high',     label: 'High',      icon: Zap,   desc: '1080p · Balanced', color: '#a78bfa' },
+  { value: 'cinematic',label: 'Cinematic', icon: Star,  desc: '1080p · Detailed', color: '#fbbf24' },
 ];
 
 export default function CreateDream() {
@@ -64,7 +78,16 @@ export default function CreateDream() {
 
     } catch (err) {
       clearInterval(stepIntervalRef.current);
-      setError(err.message || 'Something went wrong. Please try again.');
+      // Make quota/rate-limit errors user-friendly
+      const raw = err.message || '';
+      let friendly = raw;
+      if (raw.toLowerCase().includes('quota') || raw.toLowerCase().includes('rate limit') || raw.toLowerCase().includes('retry')) {
+        const seconds = raw.match(/([\d.]+)s/)?.[1];
+        friendly = seconds
+          ? `AI is busy right now. The app will retry automatically — or wait ${Math.ceil(seconds)} seconds and try again.`
+          : 'AI is busy right now. Please wait 30–60 seconds and try again.';
+      }
+      setError(friendly);
       setLoading(false);
       setCompletedSteps([]);
     }
