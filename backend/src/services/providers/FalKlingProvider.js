@@ -1,11 +1,13 @@
 const { fal } = require('@fal-ai/client');
 const VideoProvider = require('./VideoProvider');
 
-const MODEL_ID = 'fal-ai/kling-video/v1/standard/text-to-video';
+// LTX 2.3 Fast — 1080p, 6-20s, works with standard fal.ai keys
+const MODEL_ID = 'fal-ai/ltx-2.3/text-to-video/fast';
 
 /**
- * Concrete provider: fal.ai — Kling v1 Standard Text-to-Video
- * Docs: https://fal.ai/models/fal-ai/kling-video/v1/standard/text-to-video/api
+ * Concrete provider: fal.ai — LTX 2.3 Fast Text-to-Video
+ * Free tier accessible, 1080p 16:9, 6-20 second clips
+ * Docs: https://fal.ai/models/fal-ai/ltx-2.3/text-to-video/fast/api
  */
 class FalKlingProvider extends VideoProvider {
   constructor() {
@@ -16,23 +18,24 @@ class FalKlingProvider extends VideoProvider {
     fal.config({ credentials: process.env.FAL_KEY });
   }
 
-  get name() { return 'fal-kling'; }
+  get name() { return 'fal-ltx'; }
 
   /**
    * Submit a generation job to fal.ai queue.
    * Returns immediately with a request_id.
    */
   async submitJob({ prompt, negativePrompt, duration, aspectRatio }) {
-    // Kling v1 duration must be '5' or '10' (string)
-    const dur = duration >= 10 ? '10' : '5';
+    // LTX 2.3 supports 6, 8, 10 for standard duration
+    const dur = duration >= 10 ? 10 : duration >= 8 ? 8 : 6;
 
     const { request_id } = await fal.queue.submit(MODEL_ID, {
       input: {
         prompt,
-        negative_prompt: negativePrompt || 'blur, distort, low quality, watermark, text, logo, subtitles, cartoon, anime, distorted anatomy, extra limbs',
         duration: dur,
+        resolution: '1080p',
         aspect_ratio: aspectRatio || '16:9',
-        cfg_scale: 0.5,
+        fps: 25,
+        generate_audio: false, // skip audio for faster generation
       },
     });
 
@@ -48,11 +51,11 @@ class FalKlingProvider extends VideoProvider {
       logs: false,
     });
 
-    // fal.ai statuses: IN_QUEUE, IN_PROGRESS, COMPLETED
     const map = {
-      IN_QUEUE: { status: 'pending', progress: 5 },
+      IN_QUEUE:    { status: 'pending',    progress: 5  },
       IN_PROGRESS: { status: 'processing', progress: 50 },
-      COMPLETED: { status: 'completed', progress: 100 },
+      COMPLETED:   { status: 'completed',  progress: 100 },
+      FAILED:      { status: 'failed',     progress: 0  },
     };
 
     return map[status.status] || { status: 'processing', progress: 10 };

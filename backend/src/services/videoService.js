@@ -1,113 +1,72 @@
+/**
+ * videoService.js — Phase 2: Google Flow Manual Upload Workflow
+ *
+ * Flow:
+ *  1. User copies cinematic prompts → generates clips in Google Flow (Veo)
+ *  2. User downloads MP4 clips from Google Flow
+ *  3. User uploads each MP4 clip via our upload endpoint
+ *  4. Backend stores clips in Supabase Storage
+ *  5. User triggers "Create Final Video"
+ *  6. FFmpeg concatenates all uploaded clips in scene order
+ *  7. Final MP4 is stored and returned as a playable URL
+ *
+ * fal.ai provider is kept but disabled. Only called if VIDEO_PROVIDER=fal-kling
+ * is explicitly set in .env (requires paid credits — not used by default).
+ */
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const axios = require('axios');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const ffmpeg = require('fluent-ffmpeg');
 const { supabaseAdmin } = require('../config/supabase');
-const { getVideoProvider } = require('./providers');
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// ─── Prompt Engineering ───────────────────────────────────────────────────────
+// ─── Storage Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Build an enhanced, character-consistent video prompt for a scene.
+ * Upload a buffer to Supabase Storage.
+ * Returns a 7-day signed URL and the storage path.
  */
-function buildVideoPrompt(scene, characters) {
-  const protagonist = characters.find((c) => c.role === 'protagonist') || characters[0];
-
-  const characterBlock = protagonist
-    ? `Character: ${protagonist.name}, ${protagonist.appearance}. Wearing: ${protagonist.clothing}. ${protagonist.visual_description}`
-    : '';
-
-  const prompt = `
-CINEMATIC VIDEO — ${scene.title}
-
-${characterBlock}
-
-Scene: ${scene.description}
-
-Environment: ${scene.environment}
-
-Camera: ${scene.camera_angle}, ${scene.camera_movement}
-
-Lighting: ${scene.lighting}
-
-Mood: ${scene.mood}
-
-Visual style: premium cinematic realism, physically believable motion, detailed environments, natural lighting, consistent character appearance, 16:9 widescreen composition
-
-${scene.visual_prompt}
-`.trim();
-
-  const negative =
-    'blur, distort, low quality, watermark, text overlay, subtitles, logo, cartoon, anime, distorted anatomy, extra limbs, random characters, sudden costume change, jumpcut, static image, no motion';
-
-  return { prompt, negative };
-}
-
-// ─── Storage ──────────────────────────────────────────────────────────────────
-
-/**
- * Download a video from URL into a temp file. Returns local file path.
- */
-async function downloadVideoToTemp(url) {
-  const tmpDir = os.tmpdir();
-  const tmpFile = path.join(tmpDir, `scene_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
-
-  const response = await axios({ url, method: 'GET', responseType: 'stream', timeout: 120000 });
-
-  await new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(tmpFile);
-    response.data.pipe(writer);
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-  });
-
-  return tmpFile;
-}
-
-/**
- * Upload a local file to Supabase Storage.
- * Returns the public/signed URL and storage path.
- */
-async function uploadToStorage(localPath, storagePath) {
-  const fileBuffer = fs.readFileSync(localPath);
-
+async function uploadBufferToStorage(buffer, storagePath, mimeType = 'video/mp4') {
   const { error } = await supabaseAdmin.storage
     .from('dream-videos')
-    .upload(storagePath, fileBuffer, {
-      contentType: 'video/mp4',
-      upsert: true,
-    });
+    .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
 
   if (error) throw new Error(`Storage upload failed: ${error.message}`);
 
-  // Get a signed URL valid for 7 days
-  const { data: signedData, error: signedError } = await supabaseAdmin.storage
+  const { data: signed, error: signErr } = await supabaseAdmin.storage
     .from('dream-videos')
-    .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+    .createSignedUrl(storagePath, 60 * 60 * 24 * 7); // 7 days
 
-  if (signedError) throw new Error(`Failed to create signed URL: ${signedError.message}`);
+  if (signErr) throw new Error(`Signed URL creation failed: ${signErr.message}`);
 
-  return { url: signedData.signedUrl, storagePath };
+  return { url: signed.signedUrl, storagePath };
+}
+
+/**
+ * Upload a local file path to Supabase Storage.
+ */
+async function uploadFileToStorage(localPath, storagePath) {
+  const buffer = fs.readFileSync(localPath);
+  return uploadBufferToStorage(buffer, storagePath);
 }
 
 // ─── FFmpeg Assembly ──────────────────────────────────────────────────────────
 
 /**
- * Concatenate multiple MP4 files into one final video.
- * Returns the path to the output file.
+ * Concatenate MP4 files using FFmpeg concat demuxer.
+ * Normalises codec + pixel format for maximum browser compatibility.
  */
 async function concatenateVideos(inputFiles, outputPath) {
   return new Promise((resolve, reject) => {
-    // Write a concat list file
     const listPath = path.join(os.tmpdir(), `concat_${Date.now()}.txt`);
-    const listContent = inputFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(listPath, listContent);
+    // Windows-safe path escaping for the concat file
+    const listContent = inputFiles
+      .map((f) => `file '${f.replace(/\\/g, '/').replace(/'/g, "\\'")}'`)
+      .join('\n');
+    fs.writeFileSync(listPath, listContent, 'utf8');
 
     ffmpeg()
       .input(listPath)
@@ -118,7 +77,7 @@ async function concatenateVideos(inputFiles, outputPath) {
         '-preset', 'fast',
         '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
-        '-an', // no audio — scene clips have no audio track
+        '-an',  // no audio track
       ])
       .output(outputPath)
       .on('end', () => {
@@ -127,381 +86,180 @@ async function concatenateVideos(inputFiles, outputPath) {
       })
       .on('error', (err) => {
         try { fs.unlinkSync(listPath); } catch {}
-        reject(new Error(`FFmpeg concat failed: ${err.message}`));
+        reject(new Error(`FFmpeg error: ${err.message}`));
       })
       .run();
   });
 }
 
-// ─── Job Progress Helpers ─────────────────────────────────────────────────────
+// ─── Generation Record Helpers ────────────────────────────────────────────────
 
-async function updateGenerationProgress(genId, fields) {
-  if (!genId) return;
-  await supabaseAdmin
-    .from('video_generations')
-    .update({ ...fields })
-    .eq('id', genId);
-}
-
-async function updateSceneVideo(sceneVideoId, fields) {
-  await supabaseAdmin
-    .from('scene_videos')
-    .update({ ...fields })
-    .eq('id', sceneVideoId);
-}
-
-// ─── Poll Until Done ─────────────────────────────────────────────────────────
-
-/**
- * Poll fal.ai until job completes or fails.
- * Max wait: 10 minutes per scene.
- */
-async function pollUntilDone(provider, jobId, maxWaitMs = 600000) {
-  const start = Date.now();
-  let attempt = 0;
-
-  while (Date.now() - start < maxWaitMs) {
-    attempt++;
-    const { status } = await provider.getStatus(jobId);
-
-    if (status === 'completed') return 'completed';
-    if (status === 'failed') return 'failed';
-
-    // Exponential backoff: 8s → 12s → 16s → 20s (cap)
-    const delay = Math.min(8000 + attempt * 2000, 20000);
-    await sleep(delay);
-  }
-
-  return 'timeout';
-}
-
-// ─── Main Pipeline ────────────────────────────────────────────────────────────
-
-/**
- * Full Phase 2 video generation pipeline.
- * Runs as a background async process — does NOT block the HTTP response.
- */
-async function runVideoPipeline(generationId, dreamId, userId) {
-  let provider;
-  const tmpFiles = [];
-
-  try {
-    provider = getVideoProvider();
-  } catch (err) {
-    await supabaseAdmin
-      .from('video_generations')
-      .update({ status: 'failed', error_message: err.message })
-      .eq('id', generationId);
-    return;
-  }
-
-  try {
-    // 1. Load dream + scenes + characters
-    const { data: dream, error: dreamErr } = await supabaseAdmin
-      .from('dreams')
-      .select('*')
-      .eq('id', dreamId)
-      .eq('user_id', userId)
-      .single();
-
-    if (dreamErr || !dream) throw new Error('Dream not found');
-
-    const { data: scenes } = await supabaseAdmin
-      .from('scenes')
-      .select('*')
-      .eq('dream_id', dreamId)
-      .order('scene_number');
-
-    const { data: characters } = await supabaseAdmin
-      .from('characters')
-      .select('*')
-      .eq('dream_id', dreamId);
-
-    if (!scenes?.length) throw new Error('No scenes found for this dream');
-
-    // 2. Update generation record with total scenes
-    await updateGenerationProgress(generationId, {
-      status: 'processing',
-      total_scenes: scenes.length,
-      completed_scenes: 0,
-      current_scene: 1,
-    });
-
-    const sceneVideoLocalPaths = [];
-
-    // 3. Generate each scene video
-    for (let i = 0; i < scenes.length; i++) {
-      const scene = scenes[i];
-      await updateGenerationProgress(generationId, { current_scene: i + 1 });
-
-      // Get or create scene_video record
-      const { data: existingSv } = await supabaseAdmin
-        .from('scene_videos')
-        .select('*')
-        .eq('scene_id', scene.id)
-        .eq('generation_id', generationId)
-        .single();
-
-      let sceneVideoId = existingSv?.id;
-
-      if (!sceneVideoId) {
-        const { data: newSv } = await supabaseAdmin
-          .from('scene_videos')
-          .insert({
-            dream_id: dreamId,
-            scene_id: scene.id,
-            generation_id: generationId,
-            scene_number: scene.scene_number,
-            status: 'pending',
-            provider: provider.name,
-            duration: scene.duration || 5,
-          })
-          .select()
-          .single();
-        sceneVideoId = newSv?.id;
-      }
-
-      // Skip already-completed scenes (resume support)
-      if (existingSv?.status === 'completed' && existingSv?.video_url) {
-        console.log(`Scene ${i + 1} already completed, reusing.`);
-        // Download it again for assembly
-        const localPath = await downloadVideoToTemp(existingSv.video_url);
-        tmpFiles.push(localPath);
-        sceneVideoLocalPaths.push(localPath);
-        await updateGenerationProgress(generationId, {
-          completed_scenes: i + 1,
-        });
-        continue;
-      }
-
-      // Build prompt
-      const { prompt, negative } = buildVideoPrompt(scene, characters || []);
-
-      // Submit job
-      await updateSceneVideo(sceneVideoId, { status: 'processing', attempts: (existingSv?.attempts || 0) + 1 });
-
-      let jobId;
-      try {
-        jobId = await provider.submitJob({
-          prompt,
-          negativePrompt: negative,
-          duration: scene.duration || 5,
-          aspectRatio: '16:9',
-        });
-      } catch (submitErr) {
-        console.error(`Scene ${i + 1} submit failed:`, submitErr.message);
-        await updateSceneVideo(sceneVideoId, {
-          status: 'failed',
-          error_message: submitErr.message,
-        });
-        throw new Error(`Scene ${i + 1} video generation failed: ${submitErr.message}`);
-      }
-
-      await updateSceneVideo(sceneVideoId, { provider_job_id: jobId });
-      console.log(`Scene ${i + 1} submitted. Job ID: ${jobId}`);
-
-      // Poll until done
-      const pollResult = await pollUntilDone(provider, jobId);
-
-      if (pollResult !== 'completed') {
-        const errMsg = pollResult === 'timeout' ? 'Generation timed out' : 'Provider reported failure';
-        await updateSceneVideo(sceneVideoId, { status: 'failed', error_message: errMsg });
-        throw new Error(`Scene ${i + 1}: ${errMsg}`);
-      }
-
-      // Get video URL from provider
-      const videoUrl = await provider.getVideoUrl(jobId);
-      console.log(`Scene ${i + 1} generated: ${videoUrl}`);
-
-      // Download to temp
-      const localPath = await downloadVideoToTemp(videoUrl);
-      tmpFiles.push(localPath);
-
-      // Upload to Supabase Storage
-      const storagePath = `${userId}/${dreamId}/scene-${String(scene.scene_number).padStart(2, '0')}.mp4`;
-      const { url: storageUrl } = await uploadToStorage(localPath, storagePath);
-
-      // Save scene video record
-      await updateSceneVideo(sceneVideoId, {
-        status: 'completed',
-        video_url: storageUrl,
-        storage_path: storagePath,
-      });
-
-      sceneVideoLocalPaths.push(localPath);
-
-      // Update progress
-      await updateGenerationProgress(generationId, {
-        completed_scenes: i + 1,
-      });
-
-      console.log(`Scene ${i + 1}/${scenes.length} complete.`);
-
-      // Brief pause between scene generations
-      if (i < scenes.length - 1) await sleep(2000);
-    }
-
-    // 4. Concatenate all scene videos into final MP4
-    console.log('All scenes generated. Assembling final video...');
-    const finalPath = path.join(os.tmpdir(), `final_${dreamId}_${Date.now()}.mp4`);
-    tmpFiles.push(finalPath);
-
-    await concatenateVideos(sceneVideoLocalPaths, finalPath);
-    console.log('FFmpeg concatenation complete.');
-
-    // 5. Upload final video to Supabase Storage
-    const finalStoragePath = `${userId}/${dreamId}/final.mp4`;
-    const { url: finalUrl } = await uploadToStorage(finalPath, finalStoragePath);
-    console.log('Final video uploaded:', finalUrl);
-
-    // 6. Get duration from first scene total
-    const totalDuration = scenes.reduce((sum, s) => sum + (s.duration || 5), 0);
-
-    // 7. Mark generation complete
-    await updateGenerationProgress(generationId, {
-      status: 'completed',
-      final_video_url: finalUrl,
-      storage_path: finalStoragePath,
-      duration: totalDuration,
-    });
-
-    console.log(`Video pipeline complete for dream ${dreamId}`);
-  } catch (err) {
-    console.error('Video pipeline error:', err.message);
-    await updateGenerationProgress(generationId, {
-      status: 'failed',
-      error_message: err.message,
-    });
-  } finally {
-    // Cleanup temp files
-    for (const f of tmpFiles) {
-      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
-    }
-  }
-}
-
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-/**
- * Start video generation. Creates the DB record and kicks off background pipeline.
- */
-async function startVideoGeneration(dreamId, userId) {
-  // Verify dream belongs to user and is completed
-  const { data: dream, error } = await supabaseAdmin
-    .from('dreams')
-    .select('id, status, title')
-    .eq('id', dreamId)
-    .eq('user_id', userId)
-    .single();
-
-  if (error || !dream) {
-    const err = new Error('Dream not found or access denied');
-    err.status = 404;
-    throw err;
-  }
-
-  if (dream.status !== 'completed') {
-    const err = new Error('Dream must be fully analyzed before generating video');
-    err.status = 400;
-    throw err;
-  }
-
-  // Check if there's already a running generation
+async function getOrCreateGeneration(dreamId, userId) {
+  // Return existing non-failed generation or create a fresh one
   const { data: existing } = await supabaseAdmin
     .from('video_generations')
-    .select('id, status')
+    .select('*')
     .eq('dream_id', dreamId)
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
 
-  if (existing?.status === 'processing' || existing?.status === 'pending') {
-    const err = new Error('Video generation already in progress');
-    err.status = 409;
-    throw err;
+  if (existing && existing.status !== 'failed' && existing.status !== 'cancelled') {
+    return existing;
   }
 
-  // Count scenes
   const { data: scenes } = await supabaseAdmin
     .from('scenes')
     .select('id')
     .eq('dream_id', dreamId);
 
-  if (!scenes?.length) {
-    const err = new Error('No scenes found. Please analyze the dream first.');
-    err.status = 400;
-    throw err;
-  }
-
-  // Create generation record
-  const { data: gen, error: genErr } = await supabaseAdmin
+  const { data: gen, error } = await supabaseAdmin
     .from('video_generations')
     .insert({
       dream_id: dreamId,
       user_id: userId,
       status: 'pending',
-      total_scenes: scenes.length,
+      total_scenes: scenes?.length || 0,
       completed_scenes: 0,
       current_scene: 0,
     })
     .select()
     .single();
 
-  if (genErr) throw new Error(`Failed to create generation: ${genErr.message}`);
-
-  // Fire-and-forget background pipeline
-  setImmediate(() => runVideoPipeline(gen.id, dreamId, userId));
-
-  return {
-    generationId: gen.id,
-    status: 'processing',
-    totalScenes: scenes.length,
-  };
+  if (error) throw new Error(`Failed to create generation record: ${error.message}`);
+  return gen;
 }
 
+// ─── Upload Scene Video ───────────────────────────────────────────────────────
+
 /**
- * Get generation progress by generationId (verifying ownership).
+ * Upload a user-provided MP4 for one scene.
+ * Called by POST /api/dreams/:dreamId/scenes/:sceneId/upload
  */
-async function getGenerationProgress(generationId, userId) {
-  const { data, error } = await supabaseAdmin
-    .from('video_generations')
-    .select('*')
-    .eq('id', generationId)
+async function uploadSceneVideo(dreamId, sceneId, userId, fileBuffer, originalName) {
+  // Verify dream + scene ownership
+  const { data: dream } = await supabaseAdmin
+    .from('dreams')
+    .select('id, status')
+    .eq('id', dreamId)
     .eq('user_id', userId)
     .single();
 
-  if (error || !data) {
-    const err = new Error('Generation not found');
-    err.status = 404;
-    throw err;
+  if (!dream) {
+    const e = new Error('Dream not found or access denied'); e.status = 404; throw e;
   }
 
-  const progress = data.total_scenes > 0
-    ? Math.round((data.completed_scenes / data.total_scenes) * 90) // reserve 10% for assembly
-    : 0;
+  const { data: scene } = await supabaseAdmin
+    .from('scenes')
+    .select('id, scene_number, dream_id')
+    .eq('id', sceneId)
+    .eq('dream_id', dreamId)
+    .single();
+
+  if (!scene) {
+    const e = new Error('Scene not found'); e.status = 404; throw e;
+  }
+
+  // Get or create the generation record
+  const gen = await getOrCreateGeneration(dreamId, userId);
+
+  // Storage path: userId/dreamId/scene-01.mp4
+  const paddedNum = String(scene.scene_number).padStart(2, '0');
+  const storagePath = `${userId}/${dreamId}/scene-${paddedNum}.mp4`;
+
+  // Upload buffer to Supabase Storage
+  const { url, storagePath: savedPath } = await uploadBufferToStorage(
+    fileBuffer, storagePath, 'video/mp4'
+  );
+
+  // Upsert scene_videos record
+  const { data: existing } = await supabaseAdmin
+    .from('scene_videos')
+    .select('id')
+    .eq('scene_id', sceneId)
+    .eq('generation_id', gen.id)
+    .single();
+
+  if (existing) {
+    await supabaseAdmin
+      .from('scene_videos')
+      .update({
+        status: 'completed',
+        video_url: url,
+        storage_path: savedPath,
+        provider: 'google-flow-manual',
+        duration: 6,
+      })
+      .eq('id', existing.id);
+  } else {
+    await supabaseAdmin
+      .from('scene_videos')
+      .insert({
+        dream_id: dreamId,
+        scene_id: sceneId,
+        generation_id: gen.id,
+        scene_number: scene.scene_number,
+        status: 'completed',
+        provider: 'google-flow-manual',
+        video_url: url,
+        storage_path: savedPath,
+        duration: 6,
+      });
+  }
+
+  // Count how many scenes are now uploaded
+  const { data: completedScenes } = await supabaseAdmin
+    .from('scene_videos')
+    .select('id')
+    .eq('generation_id', gen.id)
+    .eq('status', 'completed');
+
+  const completedCount = completedScenes?.length || 0;
+
+  // Update generation progress
+  await supabaseAdmin
+    .from('video_generations')
+    .update({
+      status: completedCount >= gen.total_scenes ? 'pending' : 'pending',
+      completed_scenes: completedCount,
+    })
+    .eq('id', gen.id);
 
   return {
-    id: data.id,
-    dreamId: data.dream_id,
-    status: data.status,
-    totalScenes: data.total_scenes,
-    completedScenes: data.completed_scenes,
-    currentScene: data.current_scene,
-    progress,
-    finalVideoUrl: data.final_video_url,
-    duration: data.duration,
-    errorMessage: data.error_message,
-    createdAt: data.created_at,
-    updatedAt: data.updated_at,
+    sceneNumber: scene.scene_number,
+    videoUrl: url,
+    storagePath: savedPath,
+    completedScenes: completedCount,
+    totalScenes: gen.total_scenes,
   };
 }
 
+// ─── Get Upload Status ────────────────────────────────────────────────────────
+
 /**
- * Get the latest generation for a dream.
+ * Returns per-scene upload status for the current generation.
  */
-async function getDreamVideoStatus(dreamId, userId) {
-  const { data, error } = await supabaseAdmin
+async function getSceneUploadStatus(dreamId, userId) {
+  const { data: dream } = await supabaseAdmin
+    .from('dreams')
+    .select('id')
+    .eq('id', dreamId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!dream) {
+    const e = new Error('Dream not found'); e.status = 404; throw e;
+  }
+
+  const { data: scenes } = await supabaseAdmin
+    .from('scenes')
+    .select('id, scene_number, title, visual_prompt')
+    .eq('dream_id', dreamId)
+    .order('scene_number');
+
+  // Get latest generation
+  const { data: gen } = await supabaseAdmin
     .from('video_generations')
     .select('*')
     .eq('dream_id', dreamId)
@@ -510,7 +268,173 @@ async function getDreamVideoStatus(dreamId, userId) {
     .limit(1)
     .single();
 
-  if (error || !data) return null;
+  // Get uploaded scene videos
+  const uploadedMap = {};
+  if (gen) {
+    const { data: sceneVids } = await supabaseAdmin
+      .from('scene_videos')
+      .select('scene_id, status, video_url, scene_number')
+      .eq('generation_id', gen.id)
+      .eq('status', 'completed');
+
+    (sceneVids || []).forEach((sv) => {
+      uploadedMap[sv.scene_id] = sv;
+    });
+  }
+
+  const sceneStatuses = (scenes || []).map((s) => ({
+    sceneId: s.id,
+    sceneNumber: s.scene_number,
+    title: s.title,
+    visualPrompt: s.visual_prompt,
+    uploaded: !!uploadedMap[s.id],
+    videoUrl: uploadedMap[s.id]?.video_url || null,
+  }));
+
+  return {
+    generationId: gen?.id || null,
+    finalVideoUrl: gen?.final_video_url || null,
+    status: gen?.status || 'none',
+    totalScenes: scenes?.length || 0,
+    uploadedScenes: Object.keys(uploadedMap).length,
+    scenes: sceneStatuses,
+  };
+}
+
+// ─── Assemble Final Video ─────────────────────────────────────────────────────
+
+/**
+ * FFmpeg-assemble all uploaded scene clips into one final MP4.
+ * Called by POST /api/dreams/:dreamId/assemble-video
+ */
+async function assembleFinalVideo(dreamId, userId) {
+  // Verify ownership
+  const { data: dream } = await supabaseAdmin
+    .from('dreams')
+    .select('id, title')
+    .eq('id', dreamId)
+    .eq('user_id', userId)
+    .single();
+
+  if (!dream) {
+    const e = new Error('Dream not found or access denied'); e.status = 404; throw e;
+  }
+
+  // Get the active generation
+  const { data: gen } = await supabaseAdmin
+    .from('video_generations')
+    .select('*')
+    .eq('dream_id', dreamId)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!gen) {
+    const e = new Error('No video generation found. Upload scene videos first.'); e.status = 400; throw e;
+  }
+
+  // Get all completed scene videos, ordered by scene_number
+  const { data: sceneVids } = await supabaseAdmin
+    .from('scene_videos')
+    .select('*')
+    .eq('generation_id', gen.id)
+    .eq('status', 'completed')
+    .order('scene_number');
+
+  if (!sceneVids?.length) {
+    const e = new Error('No scene videos uploaded yet.'); e.status = 400; throw e;
+  }
+
+  // Mark assembling
+  await supabaseAdmin
+    .from('video_generations')
+    .update({ status: 'processing' })
+    .eq('id', gen.id);
+
+  const tmpFiles = [];
+
+  try {
+    // Download each scene video to a temp file
+    const localPaths = [];
+
+    for (const sv of sceneVids) {
+      // Get a fresh signed URL for download
+      const { data: freshSigned } = await supabaseAdmin.storage
+        .from('dream-videos')
+        .createSignedUrl(sv.storage_path, 300); // 5 min for download
+
+      if (!freshSigned?.signedUrl) throw new Error(`Could not get URL for scene ${sv.scene_number}`);
+
+      // Download via Node fetch
+      const resp = await fetch(freshSigned.signedUrl);
+      if (!resp.ok) throw new Error(`Download failed for scene ${sv.scene_number}: ${resp.status}`);
+
+      const arrayBuf = await resp.arrayBuffer();
+      const buffer = Buffer.from(arrayBuf);
+
+      const tmpPath = path.join(os.tmpdir(), `scene_${sv.scene_number}_${Date.now()}.mp4`);
+      fs.writeFileSync(tmpPath, buffer);
+      tmpFiles.push(tmpPath);
+      localPaths.push(tmpPath);
+    }
+
+    // FFmpeg concatenate
+    const finalTmpPath = path.join(os.tmpdir(), `final_${dreamId}_${Date.now()}.mp4`);
+    tmpFiles.push(finalTmpPath);
+
+    await concatenateVideos(localPaths, finalTmpPath);
+
+    // Upload final to Supabase Storage
+    const finalStoragePath = `${userId}/${dreamId}/final.mp4`;
+    const { url: finalUrl } = await uploadFileToStorage(finalTmpPath, finalStoragePath);
+
+    // Calculate total duration
+    const totalDuration = sceneVids.reduce((sum, s) => sum + (s.duration || 6), 0);
+
+    // Mark generation complete
+    await supabaseAdmin
+      .from('video_generations')
+      .update({
+        status: 'completed',
+        final_video_url: finalUrl,
+        storage_path: finalStoragePath,
+        duration: totalDuration,
+        completed_scenes: sceneVids.length,
+      })
+      .eq('id', gen.id);
+
+    return {
+      finalVideoUrl: finalUrl,
+      duration: totalDuration,
+      scenesAssembled: sceneVids.length,
+    };
+  } catch (err) {
+    await supabaseAdmin
+      .from('video_generations')
+      .update({ status: 'failed', error_message: err.message })
+      .eq('id', gen.id);
+    throw err;
+  } finally {
+    for (const f of tmpFiles) {
+      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {}
+    }
+  }
+}
+
+// ─── Existing helpers (kept for getDreamVideoStatus / refreshVideoUrl) ─────────
+
+async function getDreamVideoStatus(dreamId, userId) {
+  const { data } = await supabaseAdmin
+    .from('video_generations')
+    .select('*')
+    .eq('dream_id', dreamId)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!data) return null;
 
   return {
     id: data.id,
@@ -519,93 +443,11 @@ async function getDreamVideoStatus(dreamId, userId) {
     duration: data.duration,
     totalScenes: data.total_scenes,
     completedScenes: data.completed_scenes,
-    currentScene: data.current_scene,
-    progress: data.total_scenes > 0
-      ? Math.round((data.completed_scenes / data.total_scenes) * 90)
-      : 0,
     errorMessage: data.error_message,
     createdAt: data.created_at,
   };
 }
 
-/**
- * Get individual scene video statuses for a generation.
- */
-async function getSceneVideos(generationId, userId) {
-  // Verify ownership via join
-  const { data: gen } = await supabaseAdmin
-    .from('video_generations')
-    .select('id')
-    .eq('id', generationId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!gen) {
-    const err = new Error('Generation not found');
-    err.status = 404;
-    throw err;
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from('scene_videos')
-    .select('*')
-    .eq('generation_id', generationId)
-    .order('scene_number');
-
-  if (error) throw new Error(`Failed to fetch scene videos: ${error.message}`);
-  return data || [];
-}
-
-/**
- * Cancel an active generation.
- */
-async function cancelGeneration(generationId, userId) {
-  const { data: gen, error } = await supabaseAdmin
-    .from('video_generations')
-    .select('*')
-    .eq('id', generationId)
-    .eq('user_id', userId)
-    .single();
-
-  if (error || !gen) {
-    const err = new Error('Generation not found');
-    err.status = 404;
-    throw err;
-  }
-
-  if (!['pending', 'processing'].includes(gen.status)) {
-    const err = new Error('Generation is not active');
-    err.status = 400;
-    throw err;
-  }
-
-  // Try to cancel any in-progress scene jobs
-  try {
-    const provider = getVideoProvider();
-    const { data: sceneVids } = await supabaseAdmin
-      .from('scene_videos')
-      .select('provider_job_id')
-      .eq('generation_id', generationId)
-      .eq('status', 'processing');
-
-    for (const sv of sceneVids || []) {
-      if (sv.provider_job_id) {
-        await provider.cancelJob(sv.provider_job_id).catch(() => {});
-      }
-    }
-  } catch {}
-
-  await supabaseAdmin
-    .from('video_generations')
-    .update({ status: 'cancelled' })
-    .eq('id', generationId);
-
-  return { message: 'Generation cancelled' };
-}
-
-/**
- * Generate a fresh signed URL for a completed video (URLs expire after 7 days).
- */
 async function refreshVideoUrl(dreamId, userId) {
   const { data: gen } = await supabaseAdmin
     .from('video_generations')
@@ -619,18 +461,17 @@ async function refreshVideoUrl(dreamId, userId) {
 
   if (!gen?.storage_path) return null;
 
-  const { data: signedData } = await supabaseAdmin.storage
+  const { data: signed } = await supabaseAdmin.storage
     .from('dream-videos')
     .createSignedUrl(gen.storage_path, 60 * 60 * 24 * 7);
 
-  return signedData?.signedUrl || null;
+  return signed?.signedUrl || null;
 }
 
 module.exports = {
-  startVideoGeneration,
-  getGenerationProgress,
+  uploadSceneVideo,
+  getSceneUploadStatus,
+  assembleFinalVideo,
   getDreamVideoStatus,
-  getSceneVideos,
-  cancelGeneration,
   refreshVideoUrl,
 };

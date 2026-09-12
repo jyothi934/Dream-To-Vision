@@ -40,8 +40,10 @@ app.use(
 );
 
 // ── Body parsing ──────────────────────────────────────────
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// Note: multer handles multipart/form-data separately in routes/videos.js
+// JSON limit raised to 50kb for metadata; file uploads bypass this via multer
+app.use(express.json({ limit: '50kb' }));
+app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 
 // ── Logging ───────────────────────────────────────────────
 if (process.env.NODE_ENV !== 'test') {

@@ -3,18 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Mic, MicOff, AlertCircle, Brain, Film, Users,
-  Clapperboard, Video, ChevronRight, CheckCircle
+  Clapperboard, ChevronRight, CheckCircle
 } from 'lucide-react';
-import { createDream, analyzeDream, generateVideo } from '../services/api';
+import { createDream, analyzeDream } from '../services/api';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 
-// All pipeline steps including video generation
+// Phase 1 pipeline steps only — video is done manually via Google Flow
 const STEPS = [
-  { icon: Brain,       label: 'Analyzing dream',     phase: 1 },
-  { icon: Film,        label: 'Crafting story',       phase: 1 },
-  { icon: Users,       label: 'Building characters',  phase: 1 },
-  { icon: Clapperboard,label: 'Generating scenes',    phase: 1 },
-  { icon: Video,       label: 'Starting video AI',    phase: 2 },
+  { icon: Brain,        label: 'Analyzing dream',    phase: 1 },
+  { icon: Film,         label: 'Crafting story',     phase: 1 },
+  { icon: Users,        label: 'Building characters',phase: 1 },
+  { icon: Clapperboard, label: 'Generating scenes',  phase: 1 },
 ];
 
 export default function CreateDream() {
@@ -35,8 +34,6 @@ export default function CreateDream() {
 
   const { isListening, isSupported, error: voiceError, toggle } = useVoiceInput({ onTranscript: handleTranscript });
 
-  const setStepDone = (idx) => setCompletedSteps(prev => [...new Set([...prev, idx])]);
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     const trimmed = text.trim();
@@ -56,26 +53,14 @@ export default function CreateDream() {
     }, 6000);
 
     try {
-      // ── Phase 1: Create + Analyze ──────────────────────
       const { dream } = await createDream(trimmed, inputType);
       const { dream: result } = await analyzeDream(dream.id);
 
-      // Mark Phase 1 steps done
       clearInterval(stepIntervalRef.current);
       setCompletedSteps([0, 1, 2, 3]);
-      setStep(4); // "Starting video AI"
 
-      // ── Phase 2: Auto-start video generation ──────────
-      try {
-        await generateVideo(result.id);
-        setStepDone(4);
-      } catch (videoErr) {
-        // Video start failed — still navigate, user can retry on result page
-        console.warn('Video auto-start failed:', videoErr.message);
-      }
-
-      // Navigate to result page — video generation continues in background
-      navigate(`/dream/${result.id}?video=started`);
+      // Navigate to result — user will use Google Flow to create the video
+      navigate(`/dream/${result.id}`);
 
     } catch (err) {
       clearInterval(stepIntervalRef.current);
@@ -301,7 +286,7 @@ export default function CreateDream() {
             { icon: Brain,        label: 'AI Analysis' },
             { icon: Film,         label: 'Story + Logline' },
             { icon: Users,        label: 'Characters' },
-            { icon: Video,        label: 'Cinematic Video' },
+            { icon: Clapperboard, label: '6 Scenes + Prompts' },
           ].map(({ icon: Icon, label }) => (
             <div key={label} className="flex flex-col items-center gap-2 p-4 rounded-xl text-center"
                  style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>

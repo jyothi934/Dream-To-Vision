@@ -1,5 +1,4 @@
 import { supabase } from './supabase';
-
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 /**
@@ -66,28 +65,47 @@ export async function checkHealth() {
   return response.json();
 }
 
-// ── Video Generation ────────────────────────────────────────
+// ── Video — Google Flow Manual Upload Workflow ──────────────
 
-export async function generateVideo(dreamId) {
-  return apiFetch(`/api/dreams/${dreamId}/generate-video`, { method: 'POST' });
-}
-
-export async function getVideoProgress(generationId) {
-  return apiFetch(`/api/video-generations/${generationId}`);
+export async function getSceneUploadStatus(dreamId) {
+  return apiFetch(`/api/dreams/${dreamId}/video-status`);
 }
 
 export async function getDreamVideo(dreamId) {
   return apiFetch(`/api/dreams/${dreamId}/video`);
 }
 
-export async function getSceneVideos(generationId) {
-  return apiFetch(`/api/video-generations/${generationId}/scenes`);
-}
-
-export async function cancelVideoGeneration(generationId) {
-  return apiFetch(`/api/video-generations/${generationId}/cancel`, { method: 'POST' });
-}
-
 export async function refreshVideoUrl(dreamId) {
   return apiFetch(`/api/dreams/${dreamId}/video/refresh`);
+}
+
+export async function assembleFinalVideo(dreamId) {
+  return apiFetch(`/api/dreams/${dreamId}/assemble-video`, { method: 'POST' });
+}
+
+/**
+ * Upload one MP4 file for a specific scene.
+ * Uses FormData — does NOT set Content-Type (browser sets multipart boundary automatically).
+ */
+export async function uploadSceneVideo(dreamId, sceneId, file) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error('Not authenticated');
+
+  const formData = new FormData();
+  formData.append('video', file);
+
+  const response = await fetch(
+    `${API_URL}/api/dreams/${dreamId}/scenes/${sceneId}/upload`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      // Do NOT set Content-Type — browser sets multipart/form-data with boundary
+      body: formData,
+    }
+  );
+
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `Upload failed: ${response.status}`);
+  return result;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Brain, Film, Users, Clapperboard, ArrowLeft, Trash2, AlertCircle,
@@ -193,8 +193,6 @@ function SceneCard({ scene }) {
 export default function DreamResult() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const videoStarted = searchParams.get('video') === 'started';
   const [dream, setDream] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -380,7 +378,7 @@ export default function DreamResult() {
               </div>
               <h2 className="text-lg font-semibold text-white">Your Cinematic Vision</h2>
             </div>
-            <VideoGeneration dream={dream} autoStarted={videoStarted} />
+            <VideoGeneration dream={dream} />
           </motion.div>
         )}
 
